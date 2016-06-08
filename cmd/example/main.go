@@ -3,30 +3,30 @@ package main
 import (
 	"fmt"
 
-	"github.com/imattman/simple-task-worker/lib/worker"
+	"github.com/imattman/simple-task-worker/work"
 )
 
-type captureFactory struct {
+type echoFactory struct {
 	count int
 }
 
-func (f *captureFactory) Make(line string) task.Task {
+func (f *echoFactory) Make(line string) work.Task {
 	f.count++
-	return &captureTask{line, f.count}
+	return &echoTask{line, f.count}
 }
 
-type captureTask struct {
+type echoTask struct {
 	line string
 	id   int
 }
 
-func (t *captureTask) Process() {
+func (t *echoTask) Process() {
 	// nothing
 }
-func (t *captureTask) Print() {
+func (t *echoTask) Print() {
 	fmt.Printf("%d: %s\n", t.id, t.line)
 }
 
 func main() {
-	task.Run(&captureFactory{}, 10)
+	work.Run(&echoFactory{}, 10)
 }
