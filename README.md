@@ -1,5 +1,5 @@
-# simple-task-worker
-Simple concurrent task worker in Go
+# Concurrent task worker
+Example Go command line app that uses concurrent task workers.
 
 Credit for inspiration of Go implementation goes to [John Graham-Cumming][1] and his talk at [dotGo 2014][2] ([video][3]).
 
