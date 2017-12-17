@@ -9,49 +9,70 @@ import (
 	"sync"
 )
 
-// Task represents a unit of work that knows how to process and print itself
+// Task represents a unit of work that knows how to process itself and later yield the result.
 type Task interface {
 	Process()
 	Result() (result string, success bool)
 }
 
-// Factory is responsible for transforming a line of input into a Task
+// Factory is responsible for transforming a string of input into a Task.
 type Factory interface {
-	Make(line string) Task
+	Make(raw string) Task
 }
 
-// Config holds configuration options for controlling Run behavior.
+// Config holds configuration options for affecting Run behavior.
 type Config struct {
-	args    []string
-	scanner *bufio.Scanner
+	args     []string
+	scanner  *bufio.Scanner
+	reporter func(completed Task)
 }
 
 func defaultConfig() *Config {
-	return &Config{}
+	return &Config{
+		reporter: func(t Task) {
+			r, _ := t.Result()
+			fmt.Println(r)
+		},
+	}
 }
 
+// WithArgs specifies a slice of raw arguments as source input to a Factory.
+// Behavior falls back to reading values from the Scanner if the supplied argument slice is empty.
 func WithArgs(args []string) func(*Config) {
 	return func(cfg *Config) {
 		cfg.args = args
 	}
 }
 
+// WithScanner overrides the default Scanner used for supplying values to a Factory.
+// The default scanner tokenizes lines of text read from STDIN.
 func WithScanner(s *bufio.Scanner) func(*Config) {
 	return func(cfg *Config) {
 		cfg.scanner = s
 	}
 }
 
-// Run creates Tasks using the supplied factory and hands them to workers for processing.
+// WithReporter overrides the reporting function applied to completed task results.
+func WithReporter(f func(completed Task)) func(*Config) {
+	return func(cfg *Config) {
+		cfg.reporter = f
+	}
+}
+
+// Run creates Tasks using the supplied Factory and forwards the tasks to a pool of workers for concurrent processing.
 func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config)) {
 	cfg := defaultConfig()
 	for _, opt := range options {
 		opt(cfg)
 	}
 
+	// need at least one worker
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
 	unprocessed := make(chan Task)
 	processed := make(chan Task)
-
 	var wg sync.WaitGroup
 
 	// process commandline args / stdin
@@ -70,24 +91,26 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 			return
 		}
 
-		s := cfg.scanner
-		if s == nil {
-			s = bufio.NewScanner(os.Stdin)
-			s.Split(bufio.ScanLines)
+		scanner := cfg.scanner
+		if scanner == nil {
+			scanner = bufio.NewScanner(os.Stdin)
+			scanner.Split(bufio.ScanLines)
 		}
 
-		for s.Scan() {
-			unprocessed <- f.Make(s.Text())
+		for scanner.Scan() {
+			unprocessed <- f.Make(scanner.Text())
 		}
-		if s.Err() != nil {
-			log.Fatalf("Error reading stdin: %s", s.Err())
+		if scanner.Err() != nil {
+			log.Fatalf("Error reading stdin: %s", scanner.Err())
 		}
 	}()
 
+	// do the actual processing
+	wg.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
 			for t := range unprocessed {
 				t.Process()
 				processed <- t
@@ -101,19 +124,18 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 		close(processed)
 	}()
 
-	complete := make(chan bool, 1)
+	reported := make(chan bool, 1)
 	go func() {
 		for t := range processed {
-			res, _ := t.Result()
-			fmt.Println(res)
+			cfg.reporter(t)
 		}
-		complete <- true
+		reported <- true
 	}()
 
+	// wait for either reporting to complete or work cancelled via context
 	select {
-	case <-complete:
+	case <-reported:
 	case <-ctx.Done():
-		fmt.Fprintf(os.Stderr, "Job timed out: %s\n", ctx.Err())
-		os.Exit(1)
+		log.Fatalf("Job timed out: %s\n", ctx.Err())
 	}
 }
