@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 )
@@ -36,31 +35,8 @@ func defaultConfig() *Config {
 	}
 }
 
-// WithArgs specifies a slice of raw arguments as source input to a Factory.
-// Behavior falls back to reading values from the Scanner if the supplied argument slice is empty.
-func WithArgs(args []string) func(*Config) {
-	return func(cfg *Config) {
-		cfg.args = args
-	}
-}
-
-// WithScanner overrides the default Scanner used for supplying values to a Factory.
-// The default scanner tokenizes lines of text read from STDIN.
-func WithScanner(s *bufio.Scanner) func(*Config) {
-	return func(cfg *Config) {
-		cfg.scanner = s
-	}
-}
-
-// WithReporter overrides the reporting function applied to completed task results.
-func WithReporter(f func(completed Task)) func(*Config) {
-	return func(cfg *Config) {
-		cfg.reporter = f
-	}
-}
-
 // Run creates Tasks using the supplied Factory and forwards the tasks to a pool of workers for concurrent processing.
-func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config)) {
+func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config)) error {
 	cfg := defaultConfig()
 	for _, opt := range options {
 		opt(cfg)
@@ -73,6 +49,8 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 
 	unprocessed := make(chan Task)
 	processed := make(chan Task)
+	errors := make(chan error, 1)
+
 	var wg sync.WaitGroup
 
 	// process commandline args / stdin
@@ -101,7 +79,8 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 			unprocessed <- f.Make(scanner.Text())
 		}
 		if scanner.Err() != nil {
-			log.Fatalf("Error reading stdin: %s", scanner.Err())
+			errors <- fmt.Errorf("error reading stdin: %s", scanner.Err())
+			return
 		}
 	}()
 
@@ -124,18 +103,22 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 		close(processed)
 	}()
 
-	reported := make(chan bool, 1)
+	finished := make(chan struct{}, 1)
 	go func() {
 		for t := range processed {
 			cfg.reporter(t)
 		}
-		reported <- true
+		finished <- struct{}{}
 	}()
 
 	// wait for either reporting to complete or work cancelled via context
 	select {
-	case <-reported:
+	case err := <-errors:
+		return err
+	case <-finished:
 	case <-ctx.Done():
-		log.Fatalf("Job timed out: %s\n", ctx.Err())
+		return fmt.Errorf("job timed out: %s", ctx.Err())
 	}
+
+	return nil
 }
