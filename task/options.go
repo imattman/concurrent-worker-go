@@ -19,8 +19,8 @@ func WithScanner(s *bufio.Scanner) func(*Config) {
 }
 
 // WithReporter overrides the reporting function applied to completed task results.
-func WithReporter(f func(completed Task)) func(*Config) {
+func WithReporter(fn func(completed Task)) func(*Config) {
 	return func(cfg *Config) {
-		cfg.reporter = f
+		cfg.reportFunc = fn
 	}
 }

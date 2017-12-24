@@ -21,14 +21,14 @@ type Factory interface {
 
 // Config holds configuration options for affecting Run behavior.
 type Config struct {
-	args     []string
-	scanner  *bufio.Scanner
-	reporter func(completed Task)
+	args       []string
+	scanner    *bufio.Scanner
+	reportFunc func(completed Task)
 }
 
 func defaultConfig() *Config {
 	return &Config{
-		reporter: func(t Task) {
+		reportFunc: func(t Task) {
 			r, _ := t.Result()
 			fmt.Println(r)
 		},
@@ -36,7 +36,7 @@ func defaultConfig() *Config {
 }
 
 // Run creates Tasks using the supplied Factory and forwards the tasks to a pool of workers for concurrent processing.
-func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config)) error {
+func Run(ctx context.Context, factory Factory, numWorkers int, options ...func(*Config)) error {
 	cfg := defaultConfig()
 	for _, opt := range options {
 		opt(cfg)
@@ -53,7 +53,7 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 
 	var wg sync.WaitGroup
 
-	// process commandline args / stdin
+	// tokenize commandline args / stdin to be converted to Tasks by the Factory
 	wg.Add(1)
 	go func() {
 		defer func() {
@@ -64,27 +64,27 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 		// consume args if any present
 		if len(cfg.args) > 0 {
 			for _, v := range cfg.args {
-				unprocessed <- f.Make(v)
+				unprocessed <- factory.Make(v)
 			}
 			return
 		}
 
-		scanner := cfg.scanner
-		if scanner == nil {
-			scanner = bufio.NewScanner(os.Stdin)
-			scanner.Split(bufio.ScanLines)
+		scan := cfg.scanner
+		if scan == nil {
+			scan = bufio.NewScanner(os.Stdin)
+			scan.Split(bufio.ScanLines)
 		}
 
-		for scanner.Scan() {
-			unprocessed <- f.Make(scanner.Text())
+		for scan.Scan() {
+			unprocessed <- factory.Make(scan.Text())
 		}
-		if scanner.Err() != nil {
-			errors <- fmt.Errorf("error reading stdin: %s", scanner.Err())
+		if scan.Err() != nil {
+			errors <- fmt.Errorf("error reading stdin: %s", scan.Err())
 			return
 		}
 	}()
 
-	// do the actual processing
+	// do the actual Task processing
 	wg.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		go func() {
@@ -92,7 +92,12 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 
 			for t := range unprocessed {
 				t.Process()
-				processed <- t
+
+				select {
+				case processed <- t:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
@@ -105,17 +110,27 @@ func Run(ctx context.Context, f Factory, numWorkers int, options ...func(*Config
 
 	finished := make(chan struct{}, 1)
 	go func() {
-		for t := range processed {
-			cfg.reporter(t)
+		defer func() { finished <- struct{}{} }()
+
+		for {
+			select {
+			case t, ok := <-processed:
+				if !ok {
+					return
+				}
+				cfg.reportFunc(t)
+
+			case <-ctx.Done():
+				return
+			}
 		}
-		finished <- struct{}{}
 	}()
 
 	// wait for either reporting to complete or work cancelled via context
 	select {
+	case <-finished:
 	case err := <-errors:
 		return err
-	case <-finished:
 	case <-ctx.Done():
 		return fmt.Errorf("job timed out: %s", ctx.Err())
 	}
