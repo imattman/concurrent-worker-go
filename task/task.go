@@ -21,14 +21,14 @@ type Factory interface {
 
 // Config holds configuration options for affecting Run behavior.
 type Config struct {
-	args       []string
-	scanner    *bufio.Scanner
-	reportFunc func(completed Task)
+	args         []string
+	scanner      *bufio.Scanner
+	reporterFunc func(completed Task)
 }
 
 func defaultConfig() *Config {
 	return &Config{
-		reportFunc: func(t Task) {
+		reporterFunc: func(t Task) {
 			r, _ := t.Result()
 			fmt.Println(r)
 		},
@@ -61,7 +61,7 @@ func Run(ctx context.Context, factory Factory, numWorkers int, options ...func(*
 			wg.Done()
 		}()
 
-		// consume args if any present
+		// consume arg values as sole input if supplied
 		if len(cfg.args) > 0 {
 			for _, v := range cfg.args {
 				unprocessed <- factory.Make(v)
@@ -69,6 +69,7 @@ func Run(ctx context.Context, factory Factory, numWorkers int, options ...func(*
 			return
 		}
 
+		// non-args code path tokenizes input values from a Scanner
 		scan := cfg.scanner
 		if scan == nil {
 			scan = bufio.NewScanner(os.Stdin)
@@ -110,30 +111,21 @@ func Run(ctx context.Context, factory Factory, numWorkers int, options ...func(*
 
 	finished := make(chan struct{}, 1)
 	go func() {
-		defer func() { finished <- struct{}{} }()
-
-		for {
-			select {
-			case t, ok := <-processed:
-				if !ok {
-					return
-				}
-				cfg.reportFunc(t)
-
-			case <-ctx.Done():
-				return
-			}
+		for t := range processed {
+			cfg.reporterFunc(t)
 		}
+		finished <- struct{}{}
 	}()
 
 	// wait for either reporting to complete or work cancelled via context
 	select {
 	case <-finished:
+		return nil
 	case err := <-errors:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("job timed out: %s", ctx.Err())
+		return ctx.Err()
 	}
 
-	return nil
+	//	return nil
 }

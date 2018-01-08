@@ -55,8 +55,9 @@ func main() {
 	scan.Split(bufio.ScanWords)
 
 	err := task.Run(ctx, &echoFactory{}, nWorkers,
-		task.WithArgs(flag.Args()),
-		task.WithScanner(scan))
+		task.WithScanner(scan),
+		task.ConsumeArgs(flag.Args()),
+	)
 
 	if err != nil {
 		log.Fatalln(err)

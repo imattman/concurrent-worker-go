@@ -2,9 +2,9 @@ package task
 
 import "bufio"
 
-// WithArgs specifies a slice of raw arguments as source input to a Factory.
-// Behavior falls back to reading values from the Scanner if the supplied argument slice is empty.
-func WithArgs(args []string) func(*Config) {
+// ConsumeArgs specifies a slice of raw string values to be consumed as source input to a Factory.
+// Behavior falls back to reading values from a Scanner if the supplied argument slice is empty.
+func ConsumeArgs(args []string) func(*Config) {
 	return func(cfg *Config) {
 		cfg.args = args
 	}
@@ -21,6 +21,6 @@ func WithScanner(s *bufio.Scanner) func(*Config) {
 // WithReporter overrides the reporting function applied to completed task results.
 func WithReporter(fn func(completed Task)) func(*Config) {
 	return func(cfg *Config) {
-		cfg.reportFunc = fn
+		cfg.reporterFunc = fn
 	}
 }
